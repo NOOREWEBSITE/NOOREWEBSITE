@@ -134,8 +134,23 @@ function renderProfile(){let logo=profile.logo?`<img class=\"profileLogo\" src=\
 function shareSite(){let data={title:profile.name,text:'Visit '+profile.name,url:location.href};if(navigator.share)navigator.share(data).catch(()=>{});else copySiteLink()}
 function copySiteLink(){navigator.clipboard?.writeText(location.href).then(()=>alert('Website link copied.')).catch(()=>alert(location.href))}
 let reviewRows=[];
-async function loadReviewsFromSupabase(){try{const {data,error}=await supabaseClient.from('reviews').select('*').order('created_at',{ascending:false});if(error)throw error;reviewRows=data||[];reviews=reviewRows.map(r=>({id:r.id,name:r.name,text:r.text,stars:r.stars,approved:r.approved,date:r.created_at}));localStorage.setItem('noore_reviews',JSON.stringify(reviews));renderReviews();renderAdminReviews();}catch(e){console.warn('Supabase reviews load failed:',e.message)}}
-function renderReviews(){let el=document.getElementById('reviewsList');let shown=reviews.filter(r=>r.approved!==false);el.innerHTML=shown.length?shown.map(r=>`<div class="reviewCard"><div class="stars">${'★'.repeat(Number(r.stars))}${'☆'.repeat(5-Number(r.stars))}</div><b>${esc(r.name)}</b><p>${esc(r.text)}</p></div>`).join(''):'<p>No reviews yet. Be the first to review us.</p>'}
+async function loadReviewsFromSupabase(){
+  try{
+    const {data,error}=await supabaseClient.from('reviews').select('id,name,text,stars,approved,created_at').order('created_at',{ascending:false});
+    if(error) throw error;
+    reviewRows=data||[];
+    reviews=reviewRows.map(r=>({id:r.id,name:r.name||'Customer',text:r.text||'',stars:Number(r.stars)||5,approved:r.approved!==false,date:r.created_at}));
+    localStorage.setItem('noore_reviews',JSON.stringify(reviews));
+    renderReviews();
+    renderAdminReviews();
+  }catch(e){console.warn('Supabase reviews load failed:',e.message)}
+}
+function subscribeToReviewChanges(){
+  supabaseClient.channel('reviews-public-live')
+    .on('postgres_changes',{event:'*',schema:'public',table:'reviews'},()=>loadReviewsFromSupabase())
+    .subscribe();
+}
+function renderReviews(){let el=document.getElementById('reviewsList');let shown=reviews.filter(r=>r.approved===true || r.approved===1 || r.approved===undefined);el.innerHTML=shown.length?shown.map(r=>`<div class="reviewCard"><div class="stars">${'★'.repeat(Number(r.stars))}${'☆'.repeat(5-Number(r.stars))}</div><b>${esc(r.name)}</b><p>${esc(r.text)}</p></div>`).join(''):'<p>No reviews yet. Be the first to review us.</p>'}
 async function submitReview(){let name=document.getElementById('reviewName').value.trim(),text=document.getElementById('reviewText').value.trim(),stars=Number(document.getElementById('reviewStars').value);if(!name||!text)return alert('Please enter your name and comment.');try{const {data,error}=await supabaseClient.from('reviews').insert({name,text,stars,approved:true}).select().single();if(error)throw error;reviews.unshift({id:data.id,name:data.name,text:data.text,stars:data.stars,approved:data.approved,date:data.created_at});saveAll();renderReviews();renderAdminReviews();document.getElementById('reviewName').value='';document.getElementById('reviewText').value='';alert('Thank you for your review!')}catch(e){alert('Review could not be saved to Supabase: '+e.message)}}
 let activeChatId=localStorage.getItem('noore_chat_id')||null;
 async function ensureChatCustomer(name){let pid=localStorage.getItem('noore_chat_profile_id');if(pid){const q=await supabaseClient.from('profiles').update({name}).eq('id',pid).select('id').single();if(!q.error)return pid}const q=await supabaseClient.from('profiles').insert({name}).select('id').single();if(q.error)throw q.error;pid=q.data.id;localStorage.setItem('noore_chat_profile_id',pid);return pid}
@@ -226,13 +241,11 @@ function editProduct(id){let x=products.find(p=>p.id===id);if(!x)return;editingI
 async function deleteProduct(id){let x=products.find(p=>p.id===id);if(!x)return;if(!confirm(`Delete "${x.n}"?`))return;products=products.filter(p=>p.id!==id);cart=cart.filter(c=>c.id!==id);localStorage.setItem('noore_products',JSON.stringify(products));try{const {error}=await supabaseClient.from('products').delete().eq('id',id);if(error)throw error;}catch(e){alert('Could not delete product from Supabase: '+e.message);return}saveCart();document.body.className=localStorage.getItem('noore_theme')||'';
 render();renderCart();renderProfile();renderReviews();renderAd();
 (async function(){
-  await Promise.all([loadProductsFromSupabase(),loadProfileFromSupabase()]);
+  await Promise.allSettled([loadProductsFromSupabase(),loadProfileFromSupabase(),loadReviewsFromSupabase()]);
   render();renderCart();renderProfile();renderReviews();renderAd();
   subscribeToProfileChanges();
-  loadReviewsFromSupabase();
-  loadChatMessages().catch(()=>{});
-  supabaseClient.channel('reviews-live').on('postgres_changes',{event:'*',schema:'public',table:'reviews'},()=>loadReviewsFromSupabase()).subscribe();
-  supabaseClient.channel('messages-live').on('postgres_changes',{event:'*',schema:'public',table:'messages'},()=>{loadChatMessages().catch(()=>{});loadAdminChats()}).subscribe();
+  subscribeToReviewChanges();
+  loadAdminChats().catch(()=>{});
 })();loadProfileFromSupabase();renderProfile();renderReviews();renderAd();renderAdminProducts();if(editingId===id)clearProductForm()}
 function saveProduct(){let n=document.getElementById('prodName').value.trim(),catv=document.getElementById('prodCat').value,p=Number(document.getElementById('prodPrice').value),old=Number(document.getElementById('prodOld').value)||0,b=document.getElementById('prodBadge').value.trim(),url=document.getElementById('prodImageUrl').value.trim();if(!n||!p)return alert('Product name and price are required.');let existing=editingId?products.find(x=>x.id===editingId):null;let img=url||existing?.img||'';let file=document.getElementById('prodImageFile').files[0];if(file){let reader=new FileReader();reader.onload=()=>finishSave({n,cat:catv,p,old,b,img:reader.result});reader.readAsDataURL(file)}else finishSave({n,cat:catv,p,old,b,img})}
 async function finishSave(data){try{if(editingId){let i=products.findIndex(x=>x.id===editingId);products[i]={...products[i],...data}}else{products.push({id:crypto.randomUUID(),...data})}await saveProducts();render();renderAdminProducts();clearProductForm();alert('Product saved successfully.')}catch(e){alert('Could not save product to Supabase: '+e.message)}}
@@ -240,9 +253,11 @@ document.getElementById('prodImageFile')?.addEventListener('change',e=>{let f=e.
 document.body.className=localStorage.getItem('noore_theme')||'';
 render();renderCart();renderProfile();renderReviews();renderAd();
 (async function(){
-  await Promise.all([loadProductsFromSupabase(),loadProfileFromSupabase()]);
+  await Promise.allSettled([loadProductsFromSupabase(),loadProfileFromSupabase(),loadReviewsFromSupabase()]);
   render();renderCart();renderProfile();renderReviews();renderAd();
   subscribeToProfileChanges();
+  subscribeToReviewChanges();
+  loadAdminChats().catch(()=>{});
 })();
 </script>
 
