@@ -220,8 +220,39 @@ function togglePromo(code){let p=promos.find(x=>x.code===code);if(!p)return;p.ac
 function deletePromo(code){promos=promos.filter(x=>x.code!==code);saveAll();renderAdminPromos()}
 function renderAdminCustomers(){let b=document.getElementById('adminCustomers');if(!b)return;b.innerHTML=customers.length?customers.map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(c.phone)}</td><td>${esc(c.email||'')}</td><td>${new Date(c.lastSeen).toLocaleString()}</td></tr>`).join(''):'<tr><td colspan="4">No customer records yet.</td></tr>'}
 function requestNotifications(){if(!('Notification' in window))return alert('This browser does not support notifications.');Notification.requestPermission().then(x=>alert('Notification permission: '+x))}
-function saveTerms(){let t=document.getElementById('termsAdmin').value;localStorage.setItem('noore_terms',t);document.querySelector('#terms .adminCard').innerHTML='<p>'+esc(t).replace(/\n/g,'<br>')+'</p>';alert('Terms updated.')}
-function renderTerms(){let t=localStorage.getItem('noore_terms');if(t){document.querySelector('#terms .adminCard').innerHTML='<p>'+esc(t).replace(/\n/g,'<br>')+'</p>'}let e=document.getElementById('termsAdmin');if(e)e.value=t||''}
+async function saveTerms(){
+  const e=document.getElementById('termsAdmin');
+  if(!e)return;
+  const t=e.value.trim();
+  try{
+    const {error}=await supabaseClient.from('site_settings').upsert({key:'terms',value:t,updated_at:new Date().toISOString()},{onConflict:'key'});
+    if(error)throw error;
+    localStorage.setItem('noore_terms',t);
+    renderTermsContent(t);
+    alert('Terms updated successfully. Customers can now see the updated Terms.');
+  }catch(err){
+    console.error('Terms save error:',err);
+    alert('Terms could not be saved to Supabase: '+err.message+'\n\nPlease make sure the site_settings table allows public INSERT/UPDATE for this website.');
+  }
+}
+function renderTermsContent(t){
+  const box=document.querySelector('#terms .adminCard');
+  if(box && t)box.innerHTML='<p>'+esc(t).replace(/\n/g,'<br>')+'</p>';
+}
+async function renderTerms(){
+  let t='';
+  try{
+    const {data,error}=await supabaseClient.from('site_settings').select('value').eq('key','terms').maybeSingle();
+    if(error)throw error;
+    t=data?.value||'';
+  }catch(err){
+    console.error('Terms load error:',err);
+    t=localStorage.getItem('noore_terms')||'';
+  }
+  if(t)renderTermsContent(t);
+  const e=document.getElementById('termsAdmin');
+  if(e)e.value=t;
+}
 function renderAdminOrders(){let b=document.getElementById('adminOrders');if(!b)return;b.innerHTML=orders.length?orders.map(o=>`<tr><td><b>${esc(o.id)}</b><br><small>${new Date(o.updated).toLocaleString()}</small></td><td>${esc(o.name)}<br>${esc(o.phone)}<br><small>${esc(o.address)}</small></td><td>Rs ${money(o.total)}</td><td><select onchange="updateOrderStatus('${o.id}',this.value)">${['Received','Confirmed','Processing','Shipped','Out for Delivery','Delivered'].map(s=>`<option ${o.status===s?'selected':''}>${s}</option>`).join('')}</select></td><td><button class="smallBtn" onclick="deleteOrder('${o.id}')">Delete</button></td></tr>`).join(''):'<tr><td colspan="5">No orders yet.</td></tr>'}
 function updateOrderStatus(id,status){let o=orders.find(x=>x.id===id);if(!o)return;o.status=status;o.updated=new Date().toISOString();o.note='Status updated to '+status+'.';saveAll();renderAdminOrders();if(document.getElementById('trackId').value.toUpperCase()===id)trackOrder()}
 function deleteOrder(id){if(!confirm('Delete this order?'))return;orders=orders.filter(x=>x.id!==id);saveAll();renderAdminOrders()}
@@ -241,7 +272,7 @@ function editProduct(id){let x=products.find(p=>p.id===id);if(!x)return;editingI
 async function deleteProduct(id){let x=products.find(p=>p.id===id);if(!x)return;if(!confirm(`Delete "${x.n}"?`))return;products=products.filter(p=>p.id!==id);cart=cart.filter(c=>c.id!==id);localStorage.setItem('noore_products',JSON.stringify(products));try{const {error}=await supabaseClient.from('products').delete().eq('id',id);if(error)throw error;}catch(e){alert('Could not delete product from Supabase: '+e.message);return}saveCart();document.body.className=localStorage.getItem('noore_theme')||'';
 render();renderCart();renderProfile();renderReviews();renderAd();
 (async function(){
-  await Promise.allSettled([loadProductsFromSupabase(),loadProfileFromSupabase(),loadReviewsFromSupabase()]);
+  await Promise.allSettled([loadProductsFromSupabase(),loadProfileFromSupabase(),loadReviewsFromSupabase(),renderTerms()]);
   render();renderCart();renderProfile();renderReviews();renderAd();
   subscribeToProfileChanges();
   subscribeToReviewChanges();
