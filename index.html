@@ -168,11 +168,14 @@ async function loadProfileFromSupabase(){
     if(data && data.length){
       const r=data[0]; profileSupabaseId=r.id;
       let extra={}; try{extra=r.bio?JSON.parse(r.bio):{};}catch(e){extra={about:r.bio||''};}
-      Object.assign(profile,{name:r.name||defaultProfile.name,email:r.email||'',phone:r.phone||'',whatsapp:extra.whatsapp||r.phone||'',address:extra.address||profile.address,about:extra.about||profile.about,logo:r.avatar_url||extra.logo||profile.logo,social:extra.social||profile.social,hours:extra.hours||profile.hours});
+      Object.assign(profile,{name:r.name||defaultProfile.name,email:r.email||'',phone:r.phone||'',whatsapp:extra.whatsapp||r.phone||'',address:extra.address||defaultProfile.address,about:extra.about||defaultProfile.about,logo:r.avatar_url||extra.logo||'',social:extra.social||'',hours:extra.hours||defaultProfile.hours});
       localStorage.setItem(PROFILE_KEY,JSON.stringify(profile));
       fillProfileForm(); renderProfile();
     }
   }catch(e){console.warn('Supabase profile load failed:',e.message)}
+}
+function subscribeToProfileChanges(){
+  supabaseClient.channel('profile-live').on('postgres_changes',{event:'*',schema:'public',table:'profiles'},()=>loadProfileFromSupabase()).subscribe();
 }
 async function saveProfile(){
   profile.name=document.getElementById('profileName').value.trim(); profile.email=document.getElementById('profileEmail').value.trim(); profile.phone=document.getElementById('profilePhone').value.trim(); profile.whatsapp=document.getElementById('profileWhatsapp').value.replace(/\D/g,''); profile.address=document.getElementById('profileAddress').value.trim(); profile.about=document.getElementById('profileAbout').value.trim(); profile.logo=document.getElementById('profileLogo').value.trim(); profile.social=document.getElementById('profileSocial').value.trim(); profile.hours=document.getElementById('profileHours').value.trim();
@@ -213,11 +216,23 @@ function deleteAd(id){ads=ads.filter(x=>x.id!==id);saveAll();renderAd();renderAd
 function renderAdminProducts(){let body=document.getElementById('adminProducts');body.innerHTML=products.map(x=>`<tr><td>${x.img?`<img src="${x.img}" alt="">`:'—'}</td><td><b>${esc(x.n)}</b><br><small>${esc(x.cat)}</small></td><td>Rs ${money(x.p)}</td><td>${esc(x.b||'')}</td><td><div class="adminActions"><button class="smallBtn" onclick='editProduct(${JSON.stringify(x.id)})'>Edit</button><button class="smallBtn danger" onclick='deleteProduct(${JSON.stringify(x.id)})'>Delete</button></div></td></tr>`).join('')}
 function clearProductForm(){editingId=null;document.getElementById('productFormTitle').textContent='Add New Product';['prodName','prodPrice','prodOld','prodBadge','prodImageUrl'].forEach(id=>document.getElementById(id).value='');document.getElementById('prodCat').value='3 Piece';document.getElementById('prodImageFile').value='';document.getElementById('imagePreview').innerHTML=''}
 function editProduct(id){let x=products.find(p=>p.id===id);if(!x)return;editingId=id;document.getElementById('productFormTitle').textContent='Edit Product';document.getElementById('prodName').value=x.n;document.getElementById('prodCat').value=x.cat;document.getElementById('prodPrice').value=x.p;document.getElementById('prodOld').value=x.old||'';document.getElementById('prodBadge').value=x.b||'';document.getElementById('prodImageUrl').value=x.img&&x.img.startsWith('http')?x.img:'';document.getElementById('prodImageFile').value='';document.getElementById('imagePreview').innerHTML=x.img?`<img src="${x.img}" style="width:80px;height:95px;object-fit:cover;border-radius:4px">`:'';document.getElementById('productForm').scrollIntoView({behavior:'smooth',block:'start'})}
-async function deleteProduct(id){let x=products.find(p=>p.id===id);if(!x)return;if(!confirm(`Delete "${x.n}"?`))return;products=products.filter(p=>p.id!==id);cart=cart.filter(c=>c.id!==id);localStorage.setItem('noore_products',JSON.stringify(products));try{const {error}=await supabaseClient.from('products').delete().eq('id',id);if(error)throw error;}catch(e){alert('Could not delete product from Supabase: '+e.message);return}saveCart();document.body.className=localStorage.getItem('noore_theme')||'';render();renderCart();renderProfile();renderReviews();renderAd();loadProductsFromSupabase();loadProfileFromSupabase();renderProfile();renderReviews();renderAd();renderAdminProducts();if(editingId===id)clearProductForm()}
+async function deleteProduct(id){let x=products.find(p=>p.id===id);if(!x)return;if(!confirm(`Delete "${x.n}"?`))return;products=products.filter(p=>p.id!==id);cart=cart.filter(c=>c.id!==id);localStorage.setItem('noore_products',JSON.stringify(products));try{const {error}=await supabaseClient.from('products').delete().eq('id',id);if(error)throw error;}catch(e){alert('Could not delete product from Supabase: '+e.message);return}saveCart();document.body.className=localStorage.getItem('noore_theme')||'';
+render();renderCart();renderProfile();renderReviews();renderAd();
+(async function(){
+  await Promise.all([loadProductsFromSupabase(),loadProfileFromSupabase()]);
+  render();renderCart();renderProfile();renderReviews();renderAd();
+  subscribeToProfileChanges();
+})();loadProfileFromSupabase();renderProfile();renderReviews();renderAd();renderAdminProducts();if(editingId===id)clearProductForm()}
 function saveProduct(){let n=document.getElementById('prodName').value.trim(),catv=document.getElementById('prodCat').value,p=Number(document.getElementById('prodPrice').value),old=Number(document.getElementById('prodOld').value)||0,b=document.getElementById('prodBadge').value.trim(),url=document.getElementById('prodImageUrl').value.trim();if(!n||!p)return alert('Product name and price are required.');let existing=editingId?products.find(x=>x.id===editingId):null;let img=url||existing?.img||'';let file=document.getElementById('prodImageFile').files[0];if(file){let reader=new FileReader();reader.onload=()=>finishSave({n,cat:catv,p,old,b,img:reader.result});reader.readAsDataURL(file)}else finishSave({n,cat:catv,p,old,b,img})}
 async function finishSave(data){try{if(editingId){let i=products.findIndex(x=>x.id===editingId);products[i]={...products[i],...data}}else{products.push({id:crypto.randomUUID(),...data})}await saveProducts();render();renderAdminProducts();clearProductForm();alert('Product saved successfully.')}catch(e){alert('Could not save product to Supabase: '+e.message)}}
 document.getElementById('prodImageFile')?.addEventListener('change',e=>{let f=e.target.files[0];if(f){let r=new FileReader();r.onload=()=>document.getElementById('imagePreview').innerHTML=`<img src="${r.result}" style="width:80px;height:95px;object-fit:cover;border-radius:4px">`;r.readAsDataURL(f)}});
-document.body.className=localStorage.getItem('noore_theme')||'';render();renderCart();renderProfile();renderReviews();renderAd();loadProductsFromSupabase();
+document.body.className=localStorage.getItem('noore_theme')||'';
+render();renderCart();renderProfile();renderReviews();renderAd();
+(async function(){
+  await Promise.all([loadProductsFromSupabase(),loadProfileFromSupabase()]);
+  render();renderCart();renderProfile();renderReviews();renderAd();
+  subscribeToProfileChanges();
+})();
 </script>
 
 <div class="modal" id="adminLogin"><div class="box loginBox"><h2>Admin Login</h2><p class="adminNote">Manage your products and website settings.</p><input id="adminUser" placeholder="Admin Email"><input id="adminPass" type="password" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()"><div id="loginError" class="loginError"></div><button class="btn dark" style="width:100%" onclick="doLogin()">Login</button><button class="btn light" style="width:100%;margin-top:8px" onclick="forgotPassword()">Forgot Password?</button><button class="btn light" style="width:100%;margin-top:8px" onclick="closeAdminLogin()">Cancel</button></div></div>
